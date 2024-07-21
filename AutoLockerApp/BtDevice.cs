@@ -11,6 +11,8 @@ public class BtDevice : BluetoothDeviceInfo
 
     public override string ToString()
     {
-        return $"{DeviceName} (Connected: {Connected})";
+        var connected = Connected ? "Connected" : "Disconnected";
+
+        return $"{DeviceName} ({connected})";
     }
 }

@@ -1,17 +1,24 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <OutputType>Exe</OutputType>
+        <OutputType>WinExe</OutputType>
         <TargetFramework>net8.0-windows</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <LangVersion>default</LangVersion>
+        <ApplicationIcon>app.ico</ApplicationIcon>
     </PropertyGroup>
 
     <ItemGroup>
+        <None Remove="app.ico"/>
+        <EmbeddedResource Include="app.ico"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="32feet.NET" Version="3.5.0"/>
+        <PackageReference Include="H.NotifyIcon" Version="2.1.0" />
         <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0"/>
-        <PackageReference Include="Sharprompt" Version="2.4.5"/>
-        <PackageReference Include="Stateless" Version="5.16.0" />
+        <PackageReference Include="Stateless" Version="5.16.0"/>
         <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0"/>
     </ItemGroup>
 

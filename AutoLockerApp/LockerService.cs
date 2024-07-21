@@ -1,6 +1,7 @@
-﻿using Microsoft.Extensions.Hosting;
+﻿using System.Drawing;
+using H.NotifyIcon.Core;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Sharprompt;
 using Stateless;
 
 namespace AutoLockerApp;
@@ -24,6 +25,8 @@ public enum DeviceTrigger
 public class LockerService : BackgroundService
 {
     private readonly ILogger _logger;
+    private readonly IHostApplicationLifetime _appLifetime;
+
     private readonly WindowsHelper _windowsHelper;
     private readonly BluetoothHelper _bluetoothHelper;
 
@@ -33,13 +36,62 @@ public class LockerService : BackgroundService
     private bool _canLock;
     private DateTimeOffset _waitingForConfirmationTime = DateTimeOffset.UtcNow;
 
-    public LockerService(ILogger<LockerService> logger, WindowsHelper windowsHelper, BluetoothHelper bluetoothHelper)
+    private readonly Stream? _iconStream;
+    private readonly Icon _icon;
+    private readonly TrayIconWithContextMenu _trayIcon;
+    private readonly PopupMenu? _contextMenu;
+    private readonly PopupMenuItem? _exitMenuItem;
+
+    private BtDevice[]? _devices;
+    private int? _selectedDeviceIndex = null;
+
+    public LockerService(ILogger<LockerService> logger, IHostApplicationLifetime appLifetime,
+        WindowsHelper windowsHelper, BluetoothHelper bluetoothHelper)
     {
         _logger = logger;
+        _appLifetime = appLifetime;
+
         _windowsHelper = windowsHelper;
         _bluetoothHelper = bluetoothHelper;
 
         _deviceState = ConfigureStateMachine();
+
+        _iconStream = typeof(Program).Assembly.GetManifestResourceStream("AutoLockerApp.app.ico");
+        _icon = new Icon(_iconStream!);
+        _contextMenu = new PopupMenu();
+        _exitMenuItem = new PopupMenuItem("Exit", (_, _) =>
+        {
+            _appLifetime.StopApplication();
+        });
+
+        _trayIcon = new TrayIconWithContextMenu
+        {
+            Icon = _icon.Handle,
+            ToolTip = "AutoLocker",
+        };
+        _contextMenu.Items.Add(_exitMenuItem);
+        _trayIcon.ContextMenu = _contextMenu;
+
+        _trayIcon.Create();
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposing)
+        {
+            return;
+        }
+
+        _iconStream?.Dispose();
+        _icon.Dispose();
+        _trayIcon.Dispose();
+    }
+
+    public sealed override void Dispose()
+    {
+        Dispose(true);
+        base.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     private StateMachine<DeviceState, DeviceTrigger> ConfigureStateMachine()
@@ -115,8 +167,13 @@ public class LockerService : BackgroundService
         OnDeviceStateChanged(_deviceState.State, lastState);
     }
 
-    private async Task RefreshDeviceState(BtDevice target)
+    private async Task RefreshDeviceState(BtDevice? target)
     {
+        if (target == null)
+        {
+            return;
+        }
+
         var isConnected = target.Connected;
         var currentState = _deviceState.State;
 
@@ -143,29 +200,74 @@ public class LockerService : BackgroundService
         }
     }
 
+    private void RefreshDevice()
+    {
+        if (_devices == null)
+        {
+            return;
+        }
+
+        foreach (var device in _devices)
+        {
+            device.Refresh();
+        }
+    }
+
+    private void UpdateDeviceMenu()
+    {
+        if (_contextMenu == null)
+        {
+            return;
+        }
+
+        foreach (var item in _contextMenu.Items)
+        {
+            if (item is DevicePopupMenuItem deviceItem)
+            {
+                deviceItem.UpdateState();
+            }
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Detecting Bluetooth devices...");
         try
         {
-            var devices = _bluetoothHelper.GetDevices();
-            if (devices == null)
+            _devices = _bluetoothHelper.GetDevices();
+            if (_devices == null)
             {
                 _logger.LogInformation("No devices found");
+                return;
             }
 
-            var target = Prompt.Select<BtDevice>(options =>
+            _contextMenu?.Items.Clear();
+            foreach (var device in _devices)
             {
-                options.Items = devices;
-                options.Message = "Select target device:";
-            });
+                var menuItem = new DevicePopupMenuItem(device, (_, _) =>
+                {
+                    _canLock = false;
+                    _deviceState.Fire(DeviceTrigger.Close);
+                    _selectedDeviceIndex = Array.IndexOf(_devices, device);
+                    
+                    _logger.LogInformation("Selected device: {Device}", device.DeviceName);
+                });
 
-            _logger.LogInformation("Selected device: {TargetDeviceName}", target.DeviceName);
+                _contextMenu?.Items.Add(menuItem);
+            }
+
+            _contextMenu?.Items.Add(new PopupMenuSeparator());
+            _contextMenu?.Items.Add(_exitMenuItem!);
+
+            _trayIcon.Show();
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                target.Refresh();
-                await RefreshDeviceState(target);
+                RefreshDevice();
+                UpdateDeviceMenu();
+
+                var currentDevice = _selectedDeviceIndex == null ? null : _devices[_selectedDeviceIndex.Value];
+                await RefreshDeviceState(currentDevice);
 
                 await Task.Delay(1000, stoppingToken);
             }

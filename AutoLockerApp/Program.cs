@@ -14,7 +14,6 @@ try
     });
 
     var app = hostBuilder.Build();
-
     await app.RunAsync();
 }
 catch (Exception e)
