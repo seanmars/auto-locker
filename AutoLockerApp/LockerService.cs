@@ -22,7 +22,7 @@ public enum DeviceTrigger
     Close,
 }
 
-public class LockerService : BackgroundService
+public class LockerService : BackgroundService, IDisposable
 {
     private readonly ILogger _logger;
     private readonly IHostApplicationLifetime _appLifetime;
@@ -43,10 +43,7 @@ public class LockerService : BackgroundService
     private TrayIconWithContextMenu? _trayIcon;
     private PopupMenu? _contextMenu;
     private PopupMenuItem? _exitMenuItem;
-
     private PopupMenuItem? _disableMenuItem;
-
-    // private PopupMenuItem? _redetectMenuItem;
     private PopupSubMenu? _settingsMenuItem;
 
     private BtDevice[]? _devices;
@@ -86,13 +83,6 @@ public class LockerService : BackgroundService
 
             _logger.LogInformation("Disabled");
         });
-
-        // _redetectMenuItem = new PopupMenuItem("Re-detect Device", async (_, _) =>
-        // {
-        //     _logger.LogInformation("Re-detecting devices...");
-        //     await DiscoverDevices();
-        //     SettingDeviceMenu();
-        // });
 
         _settingsMenuItem = new PopupSubMenu("Settings");
         DefaultWaitingForConfirmationTimeouts.ForEach(time =>
@@ -137,7 +127,7 @@ public class LockerService : BackgroundService
         WaitingForConfirmationTimeout = time;
     }
 
-    protected virtual void Dispose(bool disposing)
+    private void Dispose(bool disposing)
     {
         if (!disposing)
         {
@@ -149,7 +139,7 @@ public class LockerService : BackgroundService
         _trayIcon?.Dispose();
     }
 
-    public sealed override void Dispose()
+    public override void Dispose()
     {
         Dispose(true);
         base.Dispose();
@@ -336,11 +326,7 @@ public class LockerService : BackgroundService
         _devices = await getDevicesTask;
         if (_devices == null || _devices.Length == 0)
         {
-            // _contextMenu?.Items.Clear();
-            // _contextMenu?.Items.Add(_redetectMenuItem!);
-
             _logger.LogInformation("No devices found");
-            // ShowNotification("No devices found", NotificationIcon.Warning);
             return;
         }
 
@@ -400,7 +386,7 @@ public class LockerService : BackgroundService
                     RefreshDeviceState();
                     UpdateDeviceMenu();
 
-                    var currentDevice = _selectedDeviceIndex == null ? null : _devices[_selectedDeviceIndex.Value];
+                    var currentDevice = _selectedDeviceIndex == null ? null : _devices![_selectedDeviceIndex.Value];
                     await RefreshDeviceState(currentDevice);
                 }
                 finally
