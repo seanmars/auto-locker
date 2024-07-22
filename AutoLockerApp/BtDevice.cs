@@ -3,16 +3,28 @@ using InTheHand.Net.Sockets;
 
 namespace AutoLockerApp;
 
-public class BtDevice : BluetoothDeviceInfo
+public class BtDevice
 {
-    public BtDevice(BluetoothAddress address) : base(address)
+    public BluetoothDeviceInfo Device { get; private set; }
+
+    public bool Connected => Device.Connected;
+    public string DeviceName => Device.DeviceName;
+    public BluetoothAddress DeviceAddress => Device.DeviceAddress;
+
+    public BtDevice(BluetoothAddress address)
     {
+        Device = new BluetoothDeviceInfo(address);
+    }
+
+    public void Refresh()
+    {
+        Device.Refresh();
     }
 
     public override string ToString()
     {
-        var connected = Connected ? "Connected" : "Disconnected";
+        var connected = Device.Connected ? "Connected" : "Disconnected";
 
-        return $"{DeviceName} ({connected})";
+        return $"{Device.DeviceName} ({connected})";
     }
 }
