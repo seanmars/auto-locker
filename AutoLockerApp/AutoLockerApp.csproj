@@ -15,8 +15,8 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="32feet.NET" Version="3.5.0"/>
         <PackageReference Include="H.NotifyIcon" Version="2.1.0" />
+        <PackageReference Include="InTheHand.Net.Bluetooth" Version="4.1.43" />
         <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0"/>
         <PackageReference Include="Stateless" Version="5.16.0"/>
         <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0"/>
