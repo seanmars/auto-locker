@@ -1,9 +1,14 @@
-﻿using InTheHand.Net.Sockets;
+﻿using InTheHand.Net.Bluetooth;
+using InTheHand.Net.Sockets;
 
 namespace AutoLockerApp;
 
-public class BluetoothHelper
+public class BluetoothHelper : IDisposable
 {
+    private static readonly object Lock = new();
+    private bool _isConnecting;
+    private BluetoothClient _client = new();
+
     public BtDevice[]? GetDevices()
     {
         try
@@ -17,5 +22,49 @@ public class BluetoothHelper
             Console.WriteLine(e);
             throw;
         }
+    }
+
+    public void RecordDevice(BtDevice device)
+    {
+        if (_isConnecting)
+        {
+            return;
+        }
+
+        lock (Lock)
+        {
+            _isConnecting = true;
+
+            try
+            {
+                if (device.Connected)
+                {
+                    return;
+                }
+
+                if (_client.Connected)
+                {
+                    _client.Close();
+                    _client.Dispose();
+                    _client = new BluetoothClient();
+                }
+
+                _isConnecting = true;
+                _client.Connect(device.DeviceAddress, BluetoothService.SerialPort);
+            }
+            catch (Exception)
+            {
+                // ignored
+            }
+            finally
+            {
+                _isConnecting = false;
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
     }
 }

@@ -32,18 +32,27 @@ public class LockerService : BackgroundService
 
     private readonly StateMachine<DeviceState, DeviceTrigger> _deviceState;
 
-    private const int WaitingForConfirmationTimeout = 5;
+    private int WaitingForConfirmationTimeout { get; set; } = 5;
+    private List<int> DefaultWaitingForConfirmationTimeouts { get; } = [3, 5, 15];
+
     private bool _canLock;
     private DateTimeOffset _waitingForConfirmationTime = DateTimeOffset.UtcNow;
 
-    private readonly Stream? _iconStream;
-    private readonly Icon _icon;
-    private readonly TrayIconWithContextMenu _trayIcon;
-    private readonly PopupMenu? _contextMenu;
-    private readonly PopupMenuItem? _exitMenuItem;
+    private Stream? _iconStream;
+    private Icon? _icon;
+    private TrayIconWithContextMenu? _trayIcon;
+    private PopupMenu? _contextMenu;
+    private PopupMenuItem? _exitMenuItem;
+
+    private PopupMenuItem? _disableMenuItem;
+
+    // private PopupMenuItem? _redetectMenuItem;
+    private PopupSubMenu? _settingsMenuItem;
 
     private BtDevice[]? _devices;
-    private int? _selectedDeviceIndex = null;
+    private int? _selectedDeviceIndex;
+
+    private bool IsReady => _devices is { Length: > 0 };
 
     public LockerService(ILogger<LockerService> logger, IHostApplicationLifetime appLifetime,
         WindowsHelper windowsHelper, BluetoothHelper bluetoothHelper)
@@ -56,6 +65,11 @@ public class LockerService : BackgroundService
 
         _deviceState = ConfigureStateMachine();
 
+        InitNotifyIcon();
+    }
+
+    private void InitNotifyIcon()
+    {
         _iconStream = typeof(Program).Assembly.GetManifestResourceStream("AutoLockerApp.app.ico");
         _icon = new Icon(_iconStream!);
         _contextMenu = new PopupMenu();
@@ -64,15 +78,63 @@ public class LockerService : BackgroundService
             _appLifetime.StopApplication();
         });
 
+        _disableMenuItem = new PopupMenuItem("Disable", (_, _) =>
+        {
+            _canLock = false;
+            _deviceState.Fire(DeviceTrigger.Close);
+            _selectedDeviceIndex = null;
+
+            _logger.LogInformation("Disabled");
+        });
+
+        // _redetectMenuItem = new PopupMenuItem("Re-detect Device", async (_, _) =>
+        // {
+        //     _logger.LogInformation("Re-detecting devices...");
+        //     await DiscoverDevices();
+        //     SettingDeviceMenu();
+        // });
+
+        _settingsMenuItem = new PopupSubMenu("Settings");
+        DefaultWaitingForConfirmationTimeouts.ForEach(time =>
+        {
+            var menuItem = new PopupMenuItem($"{time} Seconds", (obj, _) =>
+            {
+                UpdateWaitingForConfirmationTimeoutSetting(obj, time);
+            });
+            _settingsMenuItem.Items.Add(menuItem);
+
+            if (time == WaitingForConfirmationTimeout)
+            {
+                menuItem.Checked = true;
+            }
+        });
+
         _trayIcon = new TrayIconWithContextMenu
         {
             Icon = _icon.Handle,
             ToolTip = "AutoLocker",
         };
-        _contextMenu.Items.Add(_exitMenuItem);
-        _trayIcon.ContextMenu = _contextMenu;
 
+        _trayIcon.ContextMenu = _contextMenu;
         _trayIcon.Create();
+    }
+
+    private void UpdateWaitingForConfirmationTimeoutSetting(object? sender, int time)
+    {
+        if (sender is not PopupMenuItem menuItem)
+        {
+            return;
+        }
+
+        foreach (var item in _settingsMenuItem!.Items)
+        {
+            if (item is PopupMenuItem settingItem)
+            {
+                settingItem.Checked = settingItem == menuItem;
+            }
+        }
+
+        WaitingForConfirmationTimeout = time;
     }
 
     protected virtual void Dispose(bool disposing)
@@ -83,8 +145,8 @@ public class LockerService : BackgroundService
         }
 
         _iconStream?.Dispose();
-        _icon.Dispose();
-        _trayIcon.Dispose();
+        _icon?.Dispose();
+        _trayIcon?.Dispose();
     }
 
     public sealed override void Dispose()
@@ -191,6 +253,7 @@ public class LockerService : BackgroundService
 
             case DeviceState.WaitingConfirmDisconnect:
                 var timeElapsed = DateTimeOffset.UtcNow - _waitingForConfirmationTime;
+                _logger.LogInformation("Time elapsed: {TimeElapsed}", timeElapsed);
                 if (timeElapsed.TotalSeconds >= WaitingForConfirmationTimeout)
                 {
                     await UpdateDeviceState(DeviceTrigger.Disconnected);
@@ -200,7 +263,24 @@ public class LockerService : BackgroundService
         }
     }
 
-    private void RefreshDevice()
+    private Task TryReconnectDevice()
+    {
+        if (_selectedDeviceIndex == null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var device = _devices![_selectedDeviceIndex.Value];
+        if (device.Connected)
+        {
+            return Task.CompletedTask;
+        }
+
+        _logger.LogInformation("Trying to reconnect device: {Device}", device.DeviceName);
+        return Task.Run(() => _bluetoothHelper.RecordDevice(device));
+    }
+
+    private void RefreshDeviceState()
     {
         if (_devices == null)
         {
@@ -215,6 +295,8 @@ public class LockerService : BackgroundService
 
     private void UpdateDeviceMenu()
     {
+        _disableMenuItem!.Checked = _selectedDeviceIndex == null;
+
         if (_contextMenu == null)
         {
             return;
@@ -225,8 +307,76 @@ public class LockerService : BackgroundService
             if (item is DevicePopupMenuItem deviceItem)
             {
                 deviceItem.UpdateState();
+
+                if (_devices == null)
+                {
+                    continue;
+                }
+
+                deviceItem.Checked = _selectedDeviceIndex == Array.IndexOf(_devices, deviceItem.Device);
             }
         }
+    }
+
+    private void ShowNotification(string message, NotificationIcon icon = NotificationIcon.None)
+    {
+        _trayIcon!.ShowNotification("Auto Locker", message, icon);
+    }
+
+    private async Task DiscoverDevices()
+    {
+        _contextMenu?.Items.Clear();
+        _contextMenu?.Items.Add(new PopupMenuItem("Detecting devices...", (_, _) =>
+        {
+        }));
+        _contextMenu?.Items.Add(new PopupMenuSeparator());
+        _contextMenu?.Items.Add(_exitMenuItem!);
+
+        var getDevicesTask = Task.Run(() => _bluetoothHelper.GetDevices());
+        _devices = await getDevicesTask;
+        if (_devices == null || _devices.Length == 0)
+        {
+            // _contextMenu?.Items.Clear();
+            // _contextMenu?.Items.Add(_redetectMenuItem!);
+
+            _logger.LogInformation("No devices found");
+            // ShowNotification("No devices found", NotificationIcon.Warning);
+            return;
+        }
+
+        _logger.LogInformation("Found {Count} devices", _devices.Length);
+        ShowNotification($"Found {_devices.Length} devices", NotificationIcon.Info);
+    }
+
+    private void SettingDeviceMenu()
+    {
+        if (_devices == null || _devices.Length == 0)
+        {
+            return;
+        }
+
+        _contextMenu?.Items.Clear();
+        _contextMenu?.Items.Add(_disableMenuItem!);
+        foreach (var device in _devices)
+        {
+            var menuItem = new DevicePopupMenuItem(device, (_, _) =>
+            {
+                _canLock = false;
+                _deviceState.Fire(DeviceTrigger.Close);
+
+                _selectedDeviceIndex = Array.IndexOf(_devices, device);
+
+                _logger.LogInformation("Selected device: {Device}", device.DeviceName);
+            });
+
+            _contextMenu?.Items.Add(menuItem);
+        }
+
+        _contextMenu?.Items.Add(new PopupMenuSeparator());
+        _contextMenu?.Items.Add(_settingsMenuItem!);
+        _contextMenu?.Items.Add(_exitMenuItem!);
+
+        _trayIcon?.Show();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -234,42 +384,29 @@ public class LockerService : BackgroundService
         _logger.LogInformation("Detecting Bluetooth devices...");
         try
         {
-            _devices = _bluetoothHelper.GetDevices();
-            if (_devices == null)
-            {
-                _logger.LogInformation("No devices found");
-                return;
-            }
-
-            _contextMenu?.Items.Clear();
-            foreach (var device in _devices)
-            {
-                var menuItem = new DevicePopupMenuItem(device, (_, _) =>
-                {
-                    _canLock = false;
-                    _deviceState.Fire(DeviceTrigger.Close);
-                    _selectedDeviceIndex = Array.IndexOf(_devices, device);
-                    
-                    _logger.LogInformation("Selected device: {Device}", device.DeviceName);
-                });
-
-                _contextMenu?.Items.Add(menuItem);
-            }
-
-            _contextMenu?.Items.Add(new PopupMenuSeparator());
-            _contextMenu?.Items.Add(_exitMenuItem!);
-
-            _trayIcon.Show();
-
             while (!stoppingToken.IsCancellationRequested)
             {
-                RefreshDevice();
-                UpdateDeviceMenu();
+                _logger.LogInformation("Current Time {Time}", DateTimeOffset.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
+                try
+                {
+                    if (!IsReady)
+                    {
+                        await DiscoverDevices();
+                        SettingDeviceMenu();
+                        continue;
+                    }
 
-                var currentDevice = _selectedDeviceIndex == null ? null : _devices[_selectedDeviceIndex.Value];
-                await RefreshDeviceState(currentDevice);
+                    _ = TryReconnectDevice();
+                    RefreshDeviceState();
+                    UpdateDeviceMenu();
 
-                await Task.Delay(1000, stoppingToken);
+                    var currentDevice = _selectedDeviceIndex == null ? null : _devices[_selectedDeviceIndex.Value];
+                    await RefreshDeviceState(currentDevice);
+                }
+                finally
+                {
+                    await Task.Delay(1000, stoppingToken);
+                }
             }
         }
         catch (TaskCanceledException)
